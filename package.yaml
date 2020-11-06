@@ -1,0 +1,44 @@
+name:                LambdaCalc
+version:             0.1.0.0
+github:              "e2e4b6b7/LambdaCalc"
+license:             BSD3
+author:              "Roman Venediktov"
+maintainer:          "e2e4b6b7@gmail.com"
+
+extra-source-files:
+- README.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/LambdaCalc#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- containers > 0.6
+- unordered-containers > 0.2
+- tasty-hunit
+
+
+library:
+  source-dirs: src
+
+executables:
+  LambdaCalc-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -O3
+    dependencies:
+    - LambdaCalc
+
+tests:
+  LambdaCalc-test:
+    main:                Test.hs
+    source-dirs:         test
+    dependencies:
+    - LambdaCalc
