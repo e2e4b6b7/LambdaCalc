@@ -1,53 +1,61 @@
-module Calc where
+module Calc
+  ( alphaEq
+  , betaEq
+  , nf
+  , subst
+  ) where
 
-import           Data.HashMap.Strict as Map (HashMap, empty, insert,
-                                             lookupDefault, member)
-import           Data.HashSet        as Set (HashSet, delete, empty, insert,
-                                             member)
+import qualified Data.HashMap.Strict as Map
+import qualified Data.HashSet        as Set
+import           Data.Maybe          (fromJust, isJust)
 
-type Symb = String
+import           Lambda              (Expr (..), Symb)
 
-infixl 2 :@
+type Map = Map.HashMap
 
-data Expr
-  = Var Symb
-  | Expr :@ Expr
-  | Lam Symb Expr
-  deriving (Eq, Read, Show)
+type Set = Set.HashSet
 
-freeVars :: Expr -> HashSet Symb
+freeVars :: Expr -> Set Symb
 freeVars = addFreeVars Set.empty
   where
-    addFreeVars :: HashSet Symb -> Expr -> HashSet Symb
+    addFreeVars :: Set Symb -> Expr -> Set Symb
     addFreeVars prev (Var s)   = Set.insert s prev
     addFreeVars prev (x :@ xs) = addFreeVars (addFreeVars prev x) xs
     addFreeVars prev (Lam s x) = Set.delete s $ addFreeVars prev x
 
-rename :: HashMap Symb Symb -> Expr -> Expr
-rename renamed (Var s) = Var $ lookupDefault s s renamed
-rename renamed (expr :@ exprs) = rename renamed expr :@ rename renamed exprs
-rename renamed (Lam s expr)
-  | Map.member s renamed = undefined
-  | otherwise = Lam s $ rename renamed expr
-
 subst :: Symb -> Expr -> Expr -> Expr
 subst var val = subst' var val (freeVars val) Map.empty
   where
-    subst' :: Symb -> Expr -> HashSet Symb -> HashMap Symb Symb -> Expr -> Expr
+    subst' :: Symb -> Expr -> Set Symb -> Map Symb Symb -> Expr -> Expr
     subst' var val _ renamed (Var s)
       | s == var = val
-      | otherwise = Var $ lookupDefault s s renamed
+      | otherwise = Var $ Map.lookupDefault s s renamed
     subst' var val used renamed (expr :@ exprs) =
       subst' var val used renamed expr :@ subst' var val used renamed exprs
     subst' var val used renamed (Lam s expr)
-      | s == var = Lam s $ rename renamed expr
+      | s == var = Lam s $ rename used renamed expr
       | Set.member s used = Lam newS $ subst' var val newUsed newRenamed expr
       | otherwise = Lam s $ subst' var val used renamed expr
       where
         newS = getNewName used s
         newUsed = Set.insert newS used
         newRenamed = Map.insert s newS renamed
-        getNewName :: HashSet Symb -> Symb -> Symb
+        getNewName :: Set Symb -> Symb -> Symb
+        getNewName used s
+          | Set.member s used = getNewName used (s ++ "'")
+          | otherwise = s
+    rename :: Set Symb -> Map Symb Symb -> Expr -> Expr
+    rename _ renamed (Var s) = Var $ Map.lookupDefault s s renamed
+    rename used renamed (expr :@ exprs) =
+      rename used renamed expr :@ rename used renamed exprs
+    rename used renamed (Lam s expr)
+      | Set.member s used = Lam newS $ rename newUsed newRenamed expr
+      | otherwise = Lam s $ rename used renamed expr
+      where
+        newS = getNewName used s
+        newUsed = Set.insert newS used
+        newRenamed = Map.insert s newS renamed
+        getNewName :: Set Symb -> Symb -> Symb
         getNewName used s
           | Set.member s used = getNewName used (s ++ "'")
           | otherwise = s
@@ -55,14 +63,45 @@ subst var val = subst' var val (freeVars val) Map.empty
 infix 1 `alphaEq`
 
 alphaEq :: Expr -> Expr -> Bool
-alphaEq = alphaEq' Map.empty
+alphaEq = alphaEq' Map.empty Map.empty
   where
-    alphaEq' :: HashMap Symb Symb -> Expr -> Expr -> Bool
-    alphaEq' renamed (Var sA) (Var sB) = sB == lookupDefault sA sA renamed
-    alphaEq' renamed (exprA :@ exprsA) (exprB :@ exprsB) =
-      alphaEq' renamed exprA exprB && alphaEq' renamed exprsA exprsB
-    alphaEq' renamed (Lam sA exprA) (Lam sB exprB)
-      | sA == sB = alphaEq' renamed exprA exprB
-      | otherwise = alphaEq' newRenamed exprA exprB
+    alphaEq' :: Map Symb Symb -> Map Symb Symb -> Expr -> Expr -> Bool
+    alphaEq' renamedB renamedA (Var sA) (Var sB)
+      | boundA && boundB =
+        (renamedB Map.! sB) == sA && sB == (renamedA Map.! sA)
+      | not (boundA || boundB) = sB == sA
+      | otherwise = False
       where
-        newRenamed = Map.insert sA sB renamed
+        boundA = Map.member sA renamedA
+        boundB = Map.member sB renamedB
+    alphaEq' renamedB renamedA (exprA :@ exprsA) (exprB :@ exprsB) =
+      alphaEq' renamedB renamedA exprA exprB &&
+      alphaEq' renamedB renamedA exprsA exprsB
+    alphaEq' renamedB renamedA (Lam sA exprA) (Lam sB exprB) =
+      alphaEq' newRenamedB newRenamedA exprA exprB
+      where
+        newRenamedB = Map.insert sB sA renamedB
+        newRenamedA = Map.insert sA sB renamedA
+    alphaEq' _ _ _ _ = False
+
+nf :: Expr -> Expr
+nf expr
+  | isJust $ reduceOnce expr = nf $ fromJust $ reduceOnce expr
+  | otherwise = expr
+  where
+    reduceOnce :: Expr -> Maybe Expr
+    reduceOnce (Lam s expr :@ expr2) = Just $ subst s expr2 expr
+    reduceOnce (Lam s expr)
+      | isJust reducedExpr = fmap (Lam s) reducedExpr
+      | otherwise = Nothing
+      where
+        reducedExpr = reduceOnce expr
+    reduceOnce (expr :@ expr2)
+      | isJust $ reduceOnce expr = fmap (:@ expr2) (reduceOnce expr)
+      | otherwise = fmap (expr :@) (reduceOnce expr2)
+    reduceOnce _ = Nothing
+
+infix 1 `betaEq`
+
+betaEq :: Expr -> Expr -> Bool
+betaEq a b = nf a `alphaEq` nf b
