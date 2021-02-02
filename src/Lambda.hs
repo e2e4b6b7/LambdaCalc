@@ -1,14 +1,24 @@
+{-# LANGUAGE FlexibleContexts #-}
+
 module Lambda where
 
+import           Control.Monad.Except                   (MonadError (throwError))
+import qualified Data.HashMap.Strict                    as Map
+import           Data.Maybe                             (fromMaybe)
 import           Text.ParserCombinators.Parsec          (Parser, alphaNum, char,
                                                          many1, parse, (<|>))
 import           Text.ParserCombinators.Parsec.Language (emptyDef)
 import qualified Text.ParserCombinators.Parsec.Token    as Token
 
+type Map = Map.HashMap
+
+infixl 4 :@
+
+infixr 3 :->
+
 type Symb = String
 
-infixl 2 :@
-
+-- Терм
 data Expr
   = Var Symb
   | Expr :@ Expr
@@ -51,3 +61,43 @@ instance Read Expr where
     --lambda = flip (foldr Lam) <$ reservedOp "\\" <*> many1 identifier <* reservedOp "->" <*> term
       variable :: Parser Expr
       variable = Var <$> identifier
+
+-- Тип
+data Type
+  = TVar Symb
+  | Type :-> Type
+  deriving (Eq, Show)
+
+-- Контекст
+newtype Env =
+  Env (Map Symb Type)
+  deriving (Eq, Show)
+
+appEnv :: MonadError String m => Env -> Symb -> m Type
+appEnv (Env env) v =
+  case Map.lookup v env of
+    Just t -> return t
+    Nothing ->
+      throwError $ "There is no variable " ++ show v ++ " in the enviroment."
+
+extendEnv :: Env -> Symb -> Type -> Env
+extendEnv (Env env) s t = Env $ Map.insert s t env
+
+-- Подстановка
+newtype SubsTy =
+  SubsTy (Map Symb Type)
+  deriving (Eq, Show)
+
+appSubsTy :: SubsTy -> Type -> Type
+appSubsTy (SubsTy subsMap) st@(TVar s) = fromMaybe st (Map.lookup s subsMap)
+appSubsTy subs (t1 :-> t2) = appSubsTy subs t1 :-> appSubsTy subs t2
+
+appSubsEnv :: SubsTy -> Env -> Env
+appSubsEnv subs (Env env) = Env $ fmap (appSubsTy subs) env
+
+instance Semigroup SubsTy where
+  s1@(SubsTy subs1) <> SubsTy subs2 =
+    SubsTy $ Map.union (fmap (appSubsTy s1) subs2) subs1
+
+instance Monoid SubsTy where
+  mempty = SubsTy Map.empty

@@ -6,14 +6,13 @@ import           Calc             (betaEq)
 import           Lambda           (Expr (..))
 
 testLambda :: Assertion
-testLambda = do
-  testReadShow
+testLambda = testReadShow
 
 testReadShow :: Assertion
 testReadShow = do
   testReadShowOne (Lam "x" $ Lam "y" $ Var "x")
   testReadShowOne (Lam "z" (Var "r" :@ Var "z"))
-  testReadShowOne (Lam "x" $ Lam "y" $ (Lam "z" $ Var "z") :@ Var "x")
+  testReadShowOne (Lam "x" $ Lam "y" $ Lam "z" (Var "z") :@ Var "x")
   testReadShowOne ((Var "x" :@ Var "y") :@ Var "z")
   testReadShowOne (Var "x" :@ (Var "y" :@ Var "z"))
   testReadShowOne (Var "x\'" :@ Var "_y" :@ Var "Z")

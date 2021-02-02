@@ -1,20 +1,114 @@
+{-# LANGUAGE FlexibleContexts #-}
+
 module Calc
   ( alphaEq
   , betaEq
   , nf
   , subst
+  , principlePair
   ) where
 
-import qualified Data.HashMap.Strict as Map
-import qualified Data.HashSet        as Set
-import           Data.Maybe          (fromJust, isJust)
+import           Control.Monad.Except (MonadError (throwError), forM, forM_)
+import qualified Data.HashMap.Strict  as Map
+import qualified Data.HashSet         as Set
+import           Data.Maybe           (fromJust, isJust)
 
-import           Lambda              (Expr (..), Symb)
-
-type Map = Map.HashMap
+import           Control.Monad.State  (MonadState (get), StateT, evalStateT,
+                                       execStateT, gets, modify)
+import           Lambda               (Env (..), Expr (..), Map, SubsTy (..),
+                                       Symb, Type (..), appEnv, appSubsTy,
+                                       extendEnv)
 
 type Set = Set.HashSet
 
+---- Type deduction
+freeTVars :: Type -> Set Symb
+freeTVars = (`freeTVarsS` Set.empty)
+  where
+    freeTVarsS :: Type -> Set Symb -> Set Symb
+    freeTVarsS (TVar s)    = Set.insert s
+    freeTVarsS (t1 :-> t2) = freeTVarsS t1 . freeTVarsS t2
+
+freeTVarsEnv :: Env -> Set Symb
+freeTVarsEnv (Env envMap) =
+  Map.foldrWithKey
+    (\_ val prev -> prev . Set.union (freeTVars val))
+    id
+    envMap
+    Set.empty
+
+unify :: MonadError String m => Type -> Type -> m SubsTy
+unify (TVar s1) t2@(TVar s2)
+  | s1 == s2 = return mempty
+  | otherwise = return $ SubsTy $ Map.singleton s1 t2
+unify (TVar s1) t2
+  | Set.member s1 (freeTVars t2) =
+    throwError $
+    "Can't unify (" ++ show (TVar s1) ++ ") with (" ++ show t2 ++ ")!"
+  | otherwise = return $ SubsTy $ Map.singleton s1 t2
+unify t1 t2@(TVar _) = unify t2 t1
+unify (t11 :-> t12) (t21 :-> t22) = do
+  u2 <- unify t12 t22
+  u1 <- unify (appSubsTy u2 t11) (appSubsTy u2 t21)
+  return $ u1 <> u2
+
+principlePair :: MonadError String m => Expr -> m (Env, Type)
+principlePair expr = evalStateT (principlePair' expr) names
+  where
+    names :: [Type]
+    names = [TVar (a : replicate num' '\'') | num' <- [0 ..], a <- ['a' .. 'z']]
+
+principlePair' :: MonadError String m => Expr -> StateT [Type] m (Env, Type)
+principlePair' expr = do
+  typ <- gets head
+  modify tail
+  envList <-
+    forM
+      (Set.toList $ freeVars expr)
+      (\fvar -> do
+         typ <- gets head
+         modify tail
+         return (fvar, typ))
+  eq <- equationsS (Env $ Map.fromList envList) expr typ
+  unifier <- solve (eq [])
+  return
+    ( Env $ Map.fromList $ map (fmap (appSubsTy unifier)) envList
+    , appSubsTy unifier typ)
+  where
+    solve :: MonadError String m => [(Type, Type)] -> m SubsTy
+    solve eq =
+      execStateT
+        (forM_
+           eq
+           (\(e1, e2) -> do
+              subs <- get
+              nextSubs <- unify (appSubsTy subs e1) (appSubsTy subs e2)
+              modify (nextSubs <>)))
+        mempty
+    equationsS ::
+         MonadError String m
+      => Env
+      -> Expr
+      -> Type
+      -> StateT [Type] m ([(Type, Type)] -> [(Type, Type)])
+    equationsS env (Var v) t = do
+      vt <- appEnv env v
+      return ((vt, t) :)
+    equationsS env (e1 :@ e2) t = do
+      e2t <- gets head
+      modify tail
+      f <- equationsS env e1 (e2t :-> t)
+      s <- equationsS env e2 e2t
+      return $ f . s
+    equationsS env (Lam v e) t = do
+      vt <- gets head
+      modify tail
+      lamt <- gets head
+      modify tail
+      f <- equationsS (extendEnv env v vt) e lamt
+      return $ f . ((vt :-> lamt, t) :)
+
+---- Equivalence
 freeVars :: Expr -> Set Symb
 freeVars = addFreeVars Set.empty
   where

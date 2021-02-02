@@ -23,6 +23,7 @@ dependencies:
 - unordered-containers > 0.2
 - tasty-hunit
 - parsec > 3.1
+- mtl >= 2.2.2
 
 
 library:
